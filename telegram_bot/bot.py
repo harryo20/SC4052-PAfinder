@@ -1,34 +1,27 @@
 """
-FitFinder AI — Telegram Bot
+FitFinder AI — Conversational Telegram Bot
 
-Lets users search by photo directly in Telegram.
-Photos are forwarded to the API Gateway, results returned as inline cards.
+Every text message goes through Claude as the "brain". Claude reads the
+message plus session context (last results, history) and picks an action.
+Users never need /commands — they just chat naturally.
 
-Commands:
-  /start       — welcome + instructions
-  /cart        — view saved cart items
-  /clear_cart  — empty the cart
-  /help        — usage tips
-
-Photo handler:
-  Upload any clothing photo → get top 5 results with Buy Now and Add to Cart buttons.
-
-Usage:
-  Set TELEGRAM_BOT_TOKEN in .env, then run:
-    python telegram_bot/bot.py
+Handlers:
+  /start          — welcome message
+  handle_text     — ALL text → Claude intent → execute action
+  handle_photo    — image search (same pipeline as before)
+  handle_callback — inline keyboard buttons (Add to Cart)
 """
 
+import asyncio
 import base64
+import json
 import logging
 import os
 import sys
 
+import anthropic
 import requests
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -40,7 +33,7 @@ from telegram.ext import (
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.config import TELEGRAM_BOT_TOKEN, API_GATEWAY_PORT
+from utils.config import TELEGRAM_BOT_TOKEN, API_GATEWAY_PORT, CLAUDE_API_KEY, CLAUDE_MODEL
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -48,123 +41,372 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# In Docker the gateway is reachable via its service name.
-# Set API_GATEWAY_URL=http://api-gateway:5000 in the container environment.
 API_BASE = os.getenv("API_GATEWAY_URL", f"http://localhost:{API_GATEWAY_PORT}")
+_claude = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Per-user session ──────────────────────────────────────────────────────────
+# Stored in memory; resets on bot restart (fine for demo purposes).
 
-def _user_key(user_id: int) -> str:
-    return str(user_id)
-
-
-def _store_products(context: ContextTypes.DEFAULT_TYPE, user_id: int, products: list):
-    """Persist last search results in user_data for Add-to-Cart callbacks."""
-    if "products" not in context.user_data:
-        context.user_data["products"] = {}
-    context.user_data["products"][_user_key(user_id)] = products
+_sessions: dict = {}
 
 
-def _get_product(context: ContextTypes.DEFAULT_TYPE, user_id: int, idx: int):
-    prods = (context.user_data.get("products") or {}).get(_user_key(user_id), [])
-    return prods[idx] if 0 <= idx < len(prods) else None
+def _get_session(user_id: str) -> dict:
+    if user_id not in _sessions:
+        _sessions[user_id] = {
+            "conversation_history": [],  # alternating user/assistant dicts
+            "last_search_results": [],   # products list from most recent search
+            "last_image_analysis": None, # human-readable item description
+            "last_image_b64": None,      # stored so text refinements can re-search
+            "filters": {},               # active filters applied this session
+        }
+    return _sessions[user_id]
+
+
+# ── Claude intent classification ──────────────────────────────────────────────
+
+def _build_system_prompt(session: dict) -> str:
+    results = session["last_search_results"]
+    results_summary = "\n".join(
+        f"  {i+1}. {(p.get('title') or '?')[:50]} — "
+        f"S${p.get('price_sgd', 0):.0f} on {p.get('platform', '')}"
+        for i, p in enumerate(results[:5])
+    ) or "  None yet"
+
+    return f"""You are ShopSense, a friendly personal shopping assistant on Telegram for Singapore shoppers.
+You help users find clothing and products across Shopee SG, Lazada SG, and Google Shopping.
+
+Personality: friendly and casual, like a knowledgeable friend. Occasionally use light Singlish (lah, can, lor) but don't overdo it.
+
+Current session context:
+- Last identified item: {session.get("last_image_analysis") or "Nothing searched yet"}
+- Last search results (these are the numbered items the user refers to):
+{results_summary}
+- Active filters: {json.dumps(session.get("filters", {}))}
+
+Based on the user's message, return a JSON object with this exact structure:
+{{
+  "action": one of [
+    "add_to_cart",       // user wants to save an item
+    "view_cart",         // user wants to see their cart
+    "remove_from_cart",  // user wants to remove an item from cart
+    "clear_cart",        // user wants to empty the cart
+    "search_cheaper",    // find cheaper alternatives to last results
+    "search_specific",   // search with new / different keywords
+    "filter_results",    // filter last results by budget / platform / brand
+    "show_results",      // re-display the last search results
+    "refine_search",     // search again with a style or attribute change
+    "chitchat"           // greeting, question, help, or anything else
+  ],
+  "parameters": {{
+    // add_to_cart:       {{"item_number": 1–5 or null (default first)}}
+    // remove_from_cart:  {{"item_number": 1–5}}
+    // search_cheaper:    {{"max_price": number or null}}
+    // search_specific:   {{"keywords": "string"}}
+    // filter_results:    {{"budget_max": number or null, "platform": "string or null", "brand": "string or null"}}
+    // refine_search:     {{"modification": "string describing the change"}}
+    // chitchat:          {{"reply": "your friendly response as ShopSense"}}
+    // all others:        {{}}
+  }}
+}}
+
+Return ONLY valid JSON — no explanation, no markdown fences.
+
+Examples:
+"find something cheaper"    → {{"action":"search_cheaper","parameters":{{}}}}
+"add the first one"         → {{"action":"add_to_cart","parameters":{{"item_number":1}}}}
+"add number 3 to my cart"   → {{"action":"add_to_cart","parameters":{{"item_number":3}}}}
+"only show Shopee"          → {{"action":"filter_results","parameters":{{"platform":"Shopee"}}}}
+"budget under $50"          → {{"action":"filter_results","parameters":{{"budget_max":50}}}}
+"search for Nike instead"   → {{"action":"search_specific","parameters":{{"keywords":"Nike"}}}}
+"make it more streetwear"   → {{"action":"refine_search","parameters":{{"modification":"streetwear style"}}}}
+"what's in my cart?"        → {{"action":"view_cart","parameters":{{}}}}
+"clear my cart"             → {{"action":"clear_cart","parameters":{{}}}}
+"remove item 2"             → {{"action":"remove_from_cart","parameters":{{"item_number":2}}}}
+"hi!"                       → {{"action":"chitchat","parameters":{{"reply":"Hey! Send me a photo of any clothing item and I'll hunt down the best prices 👀"}}}}
+"""
+
+
+def _call_claude_intent(user_message: str, session: dict) -> dict:
+    """Synchronous Claude call — run via asyncio.to_thread to avoid blocking."""
+    recent_history = session["conversation_history"][-10:]
+    try:
+        resp = _claude.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=300,
+            system=_build_system_prompt(session),
+            messages=recent_history,
+        )
+        return json.loads(resp.content[0].text.strip())
+    except Exception as exc:
+        logger.warning(f"Claude intent parse failed: {exc}")
+        return {
+            "action": "chitchat",
+            "parameters": {
+                "reply": "Sorry, didn't quite catch that — try sending a photo or describing what you're looking for!"
+            },
+        }
+
+
+# ── REST helpers ──────────────────────────────────────────────────────────────
+
+def _format_results(products: list, header: str) -> str:
+    if not products:
+        return "Couldn't find anything — try different keywords or a clearer photo."
+    lines = [header, ""]
+    for i, p in enumerate(products[:5], 1):
+        title = (p.get("title") or "Unknown")[:50]
+        price = p.get("price_sgd", 0)
+        platform = p.get("platform", "")
+        rating = p.get("rating")
+        url = p.get("purchase_url", "")
+        rating_str = f"⭐ {rating:.1f}" if rating else ""
+        line = f"*{i}. {title}*\n💰 S${price:.0f}  {rating_str}  🏪 {platform}"
+        if url:
+            line += f"\n[Buy Now]({url})"
+        lines.append(line)
+        lines.append("")
+    lines.append("_Reply with a number to add to cart, or tell me what to change!_")
+    return "\n".join(lines)
+
+
+def _api_search(image_b64: str, user_id: str, additional_keywords: str = "") -> dict:
+    try:
+        r = requests.post(
+            f"{API_BASE}/api/search",
+            json={
+                "image_base64": image_b64,
+                "user_id": user_id,
+                "additional_keywords": additional_keywords,
+                "max_results": 5,
+            },
+            timeout=70,
+        )
+        return r.json()
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+def _cart_add(user_id: str, product: dict) -> bool:
+    try:
+        r = requests.post(
+            f"{API_BASE}/api/cart/add",
+            json={"user_id": user_id, "product": product},
+            timeout=5,
+        )
+        return r.ok
+    except Exception:
+        return False
+
+
+def _cart_get(user_id: str) -> dict:
+    try:
+        r = requests.get(f"{API_BASE}/api/cart/{user_id}", timeout=5)
+        return r.json()
+    except Exception:
+        return {"items": [], "total_sgd": 0}
+
+
+def _cart_clear(user_id: str) -> bool:
+    try:
+        r = requests.delete(f"{API_BASE}/api/cart/{user_id}", timeout=5)
+        return r.ok
+    except Exception:
+        return False
+
+
+# ── Action executor ───────────────────────────────────────────────────────────
+
+async def _execute_action(action: dict, session: dict, user_id: str) -> str:
+    act = action.get("action", "chitchat")
+    params = action.get("parameters", {})
+
+    # ── Conversation ──────────────────────────────────────────────────────────
+
+    if act == "chitchat":
+        return params.get("reply", "Send me a photo to start searching! 📸")
+
+    # ── Cart ──────────────────────────────────────────────────────────────────
+
+    if act == "view_cart":
+        data = _cart_get(user_id)
+        items = data.get("items", [])
+        if not items:
+            return "Your cart is empty! Send me a photo of something you want to find 🛍️"
+        lines = ["🛒 *Your Cart*\n"]
+        for i, item in enumerate(items, 1):
+            lines.append(
+                f"{i}. *{(item.get('title') or '')[:50]}*\n"
+                f"   💰 S${item.get('price_sgd', 0):.2f} · {item.get('platform', '')}"
+            )
+        lines.append(f"\n*Total: S${data.get('total_sgd', 0):.2f}*")
+        return "\n".join(lines)
+
+    if act == "clear_cart":
+        _cart_clear(user_id)
+        return "Cart cleared! 🗑️"
+
+    if act == "remove_from_cart":
+        data = _cart_get(user_id)
+        items = data.get("items", [])
+        idx = params.get("item_number", 1) - 1
+        if 0 <= idx < len(items):
+            item = items[idx]
+            try:
+                requests.delete(f"{API_BASE}/api/cart/item/{item['id']}", timeout=5)
+                return f"Removed *{(item.get('title') or '')[:40]}* from your cart."
+            except Exception:
+                return "Couldn't remove that item — try again."
+        return "That item number isn't in your cart!"
+
+    if act == "add_to_cart":
+        results = session.get("last_search_results", [])
+        if not results:
+            return "No results to add yet — send a photo first! 📸"
+        idx = max(0, (params.get("item_number") or 1) - 1)
+        idx = min(idx, len(results) - 1)
+        product = results[idx]
+        if _cart_add(user_id, product):
+            title = (product.get("title") or "Item")[:40]
+            price = product.get("price_sgd", 0)
+            platform = product.get("platform", "")
+            return (
+                f"✅ Added to cart!\n*{title}*\n"
+                f"💰 S${price:.2f} — {platform}\n\n"
+                "Say _'show cart'_ to see everything."
+            )
+        return "Couldn't add to cart — try again."
+
+    # ── Results display & filtering ───────────────────────────────────────────
+
+    if act == "show_results":
+        results = session.get("last_search_results", [])
+        if not results:
+            return "No results yet — send me a photo! 📸"
+        return _format_results(results, "Here are your results:")
+
+    if act == "filter_results":
+        results = session.get("last_search_results", [])
+        if not results:
+            return "Nothing to filter — send me a photo first!"
+        filtered = list(results)
+        budget = params.get("budget_max")
+        brand = params.get("brand")
+        platform = params.get("platform")
+        if budget:
+            filtered = [p for p in filtered if p.get("price_sgd", 9999) <= budget]
+            session["filters"]["budget_max"] = budget
+        if brand:
+            filtered = [p for p in filtered if brand.lower() in (p.get("title") or "").lower()]
+            session["filters"]["brand"] = brand
+        if platform:
+            filtered = [p for p in filtered if platform.lower() in (p.get("platform") or "").lower()]
+            session["filters"]["platform"] = platform
+        if not filtered:
+            return "No results match that filter — try relaxing the criteria?"
+        session["last_search_results"] = filtered
+        return _format_results(filtered, "Filtered results:")
+
+    # ── Re-search actions (need the stored image) ─────────────────────────────
+
+    if act in ("search_cheaper", "search_specific", "refine_search"):
+        if not session.get("last_image_b64"):
+            return "Eh, send me a photo first lah, then I can search from there! 📸"
+
+        if act == "search_cheaper":
+            results = session.get("last_search_results", [])
+            max_price = params.get("max_price")
+            if not max_price and results:
+                cheapest = min(p.get("price_sgd", 9999) for p in results)
+                max_price = cheapest * 0.8
+            keywords = f"affordable budget under {max_price:.0f} SGD" if max_price else "affordable budget"
+            header = f"Cheaper alternatives{f' under S${max_price:.0f}' if max_price else ''}:"
+
+        elif act == "search_specific":
+            keywords = params.get("keywords", "")
+            header = f"Searching with: *{keywords}*"
+
+        else:  # refine_search
+            keywords = params.get("modification", "")
+            header = f"Refined: *{keywords}*"
+
+        data = await asyncio.to_thread(
+            _api_search, session["last_image_b64"], user_id, keywords
+        )
+        if not data.get("success"):
+            return f"Search failed: {data.get('error', 'try again')}."
+        products = data.get("products", [])
+
+        if act == "search_cheaper" and max_price:
+            products = [p for p in products if p.get("price_sgd", 9999) <= max_price]
+
+        if not products:
+            return "Couldn't find matching results — try different keywords."
+        session["last_search_results"] = products
+        session["filters"] = {}
+        return _format_results(products, header)
+
+    return "Not sure what to do — try sending a photo! 📸"
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "*FitFinder AI* — Smart Shopping PA\n\n"
-        "Send me a photo of any clothing item and I'll find the best deals across "
-        "Shopee, Lazada, Google Shopping, and more.\n\n"
-        "Commands:\n"
-        "/cart — view your saved cart\n"
-        "/clear\\_cart — empty the cart\n"
-        "/help — tips for best results",
+        "*FitFinder AI* — Your Shopping PA 🛍️\n\n"
+        "Send me a photo of any clothing item and I'll find the best deals "
+        "across Shopee, Lazada, and more.\n\n"
+        "After a search you can just talk naturally:\n"
+        "• _'find something cheaper'_\n"
+        "• _'add the first one to my cart'_\n"
+        "• _'only show Shopee results'_\n"
+        "• _'make it more streetwear'_\n"
+        "• _'what's in my cart?'_\n\n"
+        "No commands needed — just chat!",
         parse_mode="Markdown",
     )
 
 
-async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "*Tips for best results:*\n\n"
-        "• Use a clear photo with the item on a plain background\n"
-        "• One item per photo works best\n"
-        "• Good lighting helps the AI identify colours accurately\n\n"
-        "*Buttons on each result:*\n"
-        "🔗 *Buy Now* — opens the product page directly\n"
-        "➕ *Add to Cart* — saves the item to your cart\n\n"
-        "All prices are shown in SGD.",
-        parse_mode="Markdown",
-    )
-
-
-async def cmd_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Natural language → Claude intent → execute action."""
     user_id = str(update.effective_user.id)
-    try:
-        r = requests.get(f"{API_BASE}/api/cart/{user_id}", timeout=5)
-        data = r.json()
-    except Exception as exc:
-        await update.message.reply_text(f"Could not reach cart service: {exc}")
-        return
+    user_message = update.message.text
+    session = _get_session(user_id)
 
-    items = data.get("items", [])
-    if not items:
-        await update.message.reply_text(
-            "Your cart is empty.\n\nSend a photo to start searching!"
-        )
-        return
+    # Record user turn before calling Claude so it sees this message as context
+    session["conversation_history"].append({"role": "user", "content": user_message})
 
-    lines = ["*Your Cart*\n"]
-    for i, item in enumerate(items, 1):
-        lines.append(
-            f"{i}. *{item['title'][:60]}*\n"
-            f"   S${item['price_sgd']:.2f} · {item.get('store_name', '')}"
-        )
-    lines.append(f"\n*Total: S${data.get('total_sgd', 0):.2f}*")
+    await context.bot.send_chat_action(update.effective_chat.id, action="typing")
 
-    # Build "Open" buttons for items that have a URL
-    keyboard = []
-    for item in items:
-        if item.get("purchase_url"):
-            keyboard.append(
-                [InlineKeyboardButton(
-                    f"Buy: {item['title'][:30]}...",
-                    url=item["purchase_url"],
-                )]
-            )
+    action = await asyncio.to_thread(_call_claude_intent, user_message, session)
+    response_text = await _execute_action(action, session, user_id)
 
-    reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
+    session["conversation_history"].append({"role": "assistant", "content": response_text})
+    # Cap history at 20 turns (10 exchanges) to stay within token budget
+    if len(session["conversation_history"]) > 20:
+        session["conversation_history"] = session["conversation_history"][-20:]
+
     await update.message.reply_text(
-        "\n".join(lines),
+        response_text,
         parse_mode="Markdown",
-        reply_markup=reply_markup,
+        disable_web_page_preview=True,
     )
-
-
-async def cmd_clear_cart(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    try:
-        requests.delete(f"{API_BASE}/api/cart/{user_id}", timeout=5)
-        await update.message.reply_text("Cart cleared.")
-    except Exception as exc:
-        await update.message.reply_text(f"Error: {exc}")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Download the photo, send to /api/search, display top results."""
-    user_id = update.effective_user.id
+    """Download photo → full search pipeline → display cards → update session."""
+    user_id = str(update.effective_user.id)
+    session = _get_session(user_id)
+
     status = await update.message.reply_text("Analysing image, searching platforms…")
 
     try:
-        # Telegram provides multiple resolutions; use the largest
         photo_file = await update.message.photo[-1].get_file()
         photo_bytes = await photo_file.download_as_bytearray()
         image_b64 = base64.b64encode(photo_bytes).decode("utf-8")
 
         r = requests.post(
             f"{API_BASE}/api/search",
-            json={"image_base64": image_b64, "user_id": str(user_id), "max_results": 5},
+            json={"image_base64": image_b64, "user_id": user_id, "max_results": 5},
             timeout=70,
         )
         result = r.json()
@@ -175,32 +417,39 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await status.delete()
 
     if not result.get("success"):
-        await update.message.reply_text(
-            f"Search error: {result.get('error', 'Unknown error')}"
-        )
+        await update.message.reply_text(f"Search error: {result.get('error', 'Unknown error')}")
         return
 
     products = result.get("products", [])
     if not products:
-        await update.message.reply_text(
-            "No products found — try a clearer photo or different angle."
-        )
+        await update.message.reply_text("No products found — try a clearer photo or different angle.")
         return
 
-    # Store products for Add-to-Cart callbacks
-    _store_products(context, user_id, products)
-
-    # Show AI analysis summary
+    # Store everything the text handler needs for follow-ups
     analysis = result.get("analysis") or {}
-    summary = (
-        f"AI identified: *{(analysis.get('type') or '').title()}*"
-        f" · {analysis.get('color', '')} · {(analysis.get('style') or '').title()}"
+    item_desc = (
+        analysis.get("description")
+        or f"{analysis.get('color', '')} {analysis.get('type', '')}".strip()
+        or "this item"
     )
+    session["last_search_results"] = products
+    session["last_image_b64"] = image_b64
+    session["last_image_analysis"] = item_desc
+    session["filters"] = {}
+    session["conversation_history"].append({
+        "role": "user",
+        "content": f"[User sent a photo — identified as: {item_desc}]",
+    })
+
+    # Summary header
+    color = analysis.get("color", "")
+    style = (analysis.get("style") or "").title()
+    summary = f"Found: *{item_desc.title()}*" + (f" · {color} · {style}" if color or style else "")
     await update.message.reply_text(summary, parse_mode="Markdown")
 
-    # Send each product as a separate message
+    # Product cards
     for idx, p in enumerate(products[:5]):
-        title = p.get("title", "Unknown")[:80]
+        title = (p.get("title") or "Unknown")[:80]
         store = p.get("store_name", "")
         platform = p.get("platform", "")
         price = p.get("price_sgd", 0)
@@ -218,13 +467,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         keyboard = [[]]
         if p.get("purchase_url"):
-            keyboard[0].append(
-                InlineKeyboardButton("🔗 Buy Now", url=p["purchase_url"])
-            )
-        keyboard[0].append(
-            InlineKeyboardButton("➕ Add to Cart", callback_data=f"cart|{idx}")
-        )
-
+            keyboard[0].append(InlineKeyboardButton("🔗 Buy Now", url=p["purchase_url"]))
+        keyboard[0].append(InlineKeyboardButton("➕ Add to Cart", callback_data=f"cart|{idx}"))
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         if p.get("image_url"):
@@ -237,61 +481,54 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 continue
             except Exception:
-                pass  # fall back to text message if image fails
+                pass
+        await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
-        await update.message.reply_text(
-            text, parse_mode="Markdown", reply_markup=reply_markup
-        )
-
-    await update.message.reply_text(
-        f"Found {len(products)} results total.  Use /cart to view saved items."
+    footer = (
+        f"Found {len(products)} results. "
+        "Reply naturally — e.g. _'find cheaper'_, _'add the first one'_, _'only Shopee'_."
     )
+    session["conversation_history"].append({"role": "assistant", "content": footer})
+    await update.message.reply_text(footer, parse_mode="Markdown")
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button presses."""
+    """Inline Add to Cart button presses."""
     query = update.callback_query
     await query.answer()
 
     if not query.data.startswith("cart|"):
         return
 
-    user_id = query.from_user.id
+    user_id = str(query.from_user.id)
+    session = _get_session(user_id)
     idx = int(query.data.split("|")[1])
-    product = _get_product(context, user_id, idx)
+    results = session.get("last_search_results", [])
+    product = results[idx] if 0 <= idx < len(results) else None
 
     if not product:
         await query.answer("Product data expired — search again.", show_alert=True)
         return
 
-    try:
-        r = requests.post(
-            f"{API_BASE}/api/cart/add",
-            json={"user_id": str(user_id), "product": product},
-            timeout=5,
-        )
-        if r.ok:
-            title = product.get("title", "Item")[:40]
-            await query.answer(f"Added: {title}", show_alert=False)
-        else:
-            await query.answer("Failed to add to cart.", show_alert=True)
-    except Exception as exc:
-        await query.answer(f"Error: {exc}", show_alert=True)
+    if _cart_add(user_id, product):
+        title = (product.get("title") or "Item")[:40]
+        await query.answer(f"Added: {title}", show_alert=False)
+    else:
+        await query.answer("Failed to add to cart.", show_alert=True)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
-        print("[TelegramBot] TELEGRAM_BOT_TOKEN not set in .env — bot will not start.")
+        print("[TelegramBot] TELEGRAM_BOT_TOKEN not set — bot will not start.")
         return
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("cart", cmd_cart))
-    app.add_handler(CommandHandler("clear_cart", cmd_clear_cart))
+    # Single handler for all natural-language text — no per-command handlers needed
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
