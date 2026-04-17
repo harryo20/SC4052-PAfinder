@@ -1,16 +1,3 @@
-"""
-FitFinder AI — Conversational Telegram Bot
-
-Every text message goes through Claude as the "brain". Claude reads the
-message plus session context (last results, history) and picks an action.
-Users never need /commands — they just chat naturally.
-
-Handlers:
-  /start          — welcome message
-  handle_text     — ALL text → Claude intent → execute action
-  handle_photo    — image search (same pipeline as before)
-  handle_callback — inline keyboard buttons (Add to Cart)
-"""
 
 import asyncio
 import base64
@@ -52,25 +39,20 @@ logger = logging.getLogger(__name__)
 API_BASE = os.getenv("API_GATEWAY_URL", f"http://localhost:{API_GATEWAY_PORT}")
 _claude = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
 
-# ── Per-user session ──────────────────────────────────────────────────────────
-# Stored in memory; resets on bot restart (fine for demo purposes).
-
 _sessions: dict = {}
 
 
 def _get_session(user_id: str) -> dict:
     if user_id not in _sessions:
         _sessions[user_id] = {
-            "conversation_history": [],  # alternating user/assistant dicts
-            "last_search_results": [],   # products list from most recent search
-            "last_image_analysis": None, # human-readable item description
-            "last_image_b64": None,      # stored so text refinements can re-search
-            "filters": {},               # active filters applied this session
+            "conversation_history": [],
+            "last_search_results": [],
+            "last_image_analysis": None,
+            "last_image_b64": None,
+            "filters": {},
         }
     return _sessions[user_id]
 
-
-# ── Claude intent classification ──────────────────────────────────────────────
 
 def _build_system_prompt(session: dict) -> str:
     results = session["last_search_results"]
@@ -80,7 +62,7 @@ def _build_system_prompt(session: dict) -> str:
         for i, p in enumerate(results[:5])
     ) or "  None yet"
 
-    return f"""You are ShopSense, a friendly personal shopping assistant on Telegram for Singapore shoppers.
+    return f"""You are PAFinder, a friendly personal shopping assistant on Telegram for Singapore shoppers.
 You help users find clothing and products across Shopee SG, Lazada SG, and Google Shopping.
 
 Personality: friendly and casual, like a knowledgeable friend. Occasionally use light Singlish (lah, can, lor) but don't overdo it.
@@ -115,7 +97,7 @@ Based on the user's message, return a JSON object with this exact structure:
     // search_specific:   {{"keywords": "string"}}
     // filter_results:    {{"budget_max": number or null, "platform": "string or null", "brand": "string or null"}}
     // refine_search:     {{"modification": "string describing the change"}}
-    // chitchat:          {{"reply": "your friendly response as ShopSense"}}
+    // chitchat:          {{"reply": "your friendly response as PAFinder"}}
     // all others:        {{}}
   }}
 }}
@@ -161,8 +143,6 @@ def _call_claude_intent(user_message: str, session: dict) -> dict:
         }
 
 
-# ── REST helpers ──────────────────────────────────────────────────────────────
-
 def _format_results(products: list, header: str) -> str:
     if not products:
         return "Couldn't find anything — try different keywords or a clearer photo."
@@ -179,7 +159,6 @@ def _format_results(products: list, header: str) -> str:
             line += f"\n[Buy Now]({url})"
         lines.append(line)
         lines.append("")
-    lines.append("_Reply with a number to add to cart, or tell me what to change!_")
     return "\n".join(lines)
 
 
@@ -228,18 +207,12 @@ def _cart_clear(user_id: str) -> bool:
         return False
 
 
-# ── Action executor ───────────────────────────────────────────────────────────
-
 async def _execute_action(action: dict, session: dict, user_id: str) -> str:
     act = action.get("action", "chitchat")
     params = action.get("parameters", {})
 
-    # ── Conversation ──────────────────────────────────────────────────────────
-
     if act == "chitchat":
         return params.get("reply", "Send me a photo to start searching! 📸")
-
-    # ── Cart ──────────────────────────────────────────────────────────────────
 
     if act == "view_cart":
         data = _cart_get(user_id)
@@ -323,8 +296,6 @@ async def _execute_action(action: dict, session: dict, user_id: str) -> str:
             )
         return "Couldn't add to cart — try again."
 
-    # ── Results display & filtering ───────────────────────────────────────────
-
     if act == "show_results":
         results = session.get("last_search_results", [])
         if not results:
@@ -352,8 +323,6 @@ async def _execute_action(action: dict, session: dict, user_id: str) -> str:
             return "No results match that filter — try relaxing the criteria?"
         session["last_search_results"] = filtered
         return _format_results(filtered, "Filtered results:")
-
-    # ── Re-search actions (need the stored image) ─────────────────────────────
 
     if act in ("search_cheaper", "search_specific", "refine_search"):
         if not session.get("last_image_b64"):
@@ -395,8 +364,6 @@ async def _execute_action(action: dict, session: dict, user_id: str) -> str:
     return "Not sure what to do — try sending a photo! 📸"
 
 
-# ── Handlers ──────────────────────────────────────────────────────────────────
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "*FitFinder AI* — Your Shopping PA 🛍️\n\n"
@@ -419,7 +386,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     session = _get_session(user_id)
 
-    # Record user turn before calling Claude so it sees this message as context
     session["conversation_history"].append({"role": "user", "content": user_message})
 
     await context.bot.send_chat_action(update.effective_chat.id, action="typing")
@@ -428,8 +394,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     response_text = await _execute_action(action, session, user_id)
 
     session["conversation_history"].append({"role": "assistant", "content": response_text})
-    # Cap history at 20 turns (10 exchanges) to stay within token budget
-    if len(session["conversation_history"]) > 20:
+    if len(session["conversation_history"]) > 20:  # stay within token budget
         session["conversation_history"] = session["conversation_history"][-20:]
 
     await update.message.reply_text(
@@ -472,7 +437,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("No products found — try a clearer photo or different angle.")
         return
 
-    # Store everything the text handler needs for follow-ups
     analysis = result.get("analysis") or {}
     item_desc = (
         analysis.get("description")
@@ -531,12 +495,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         await update.message.reply_text(text, parse_mode="Markdown", reply_markup=reply_markup)
 
-    footer = (
-        f"Found {len(products)} results. "
-        "Reply naturally — e.g. _'find cheaper'_, _'add the first one'_, _'only Shopee'_."
-    )
-    session["conversation_history"].append({"role": "assistant", "content": footer})
-    await update.message.reply_text(footer, parse_mode="Markdown")
+    session["conversation_history"].append({
+        "role": "assistant",
+        "content": f"Showed {len(products)} results.",
+    })
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -608,8 +570,6 @@ async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text("Got it, stopped watching that item 👍")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
 async def _post_init(application: Application) -> None:
     init_db()
     scheduler = get_scheduler(application.bot)
@@ -632,8 +592,7 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    # alert_ pattern must be registered before the generic catch-all
-    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^alert_"))
+    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^alert_"))  # must be before catch-all
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("[TelegramBot] Running (polling)…")

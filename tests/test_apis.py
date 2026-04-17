@@ -1,17 +1,3 @@
-"""
-test_apis.py — Integration tests for FitFinder AI microservices.
-
-These tests hit the running services via HTTP (exactly how they would be
-called in production), verifying each REST endpoint independently.
-
-Prerequisites:
-  python start_all.py --mock   # starts all services with mock data
-
-Run:
-  pytest tests/ -v
-  pytest tests/ -v -k "health"   # only health checks
-"""
-
 import io
 import pytest
 import requests
@@ -29,7 +15,6 @@ BASE = {
 TEST_USER = "pytest_user_001"
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _blue_jpeg() -> bytes:
     """Create a tiny JPEG (blue rectangle) for upload tests."""
@@ -39,7 +24,6 @@ def _blue_jpeg() -> bytes:
     return buf.getvalue()
 
 
-# ── Health checks ─────────────────────────────────────────────────────────────
 
 class TestHealth:
     @pytest.mark.parametrize("service", list(BASE.keys()))
@@ -49,7 +33,6 @@ class TestHealth:
         assert r.json()["status"] == "ok"
 
 
-# ── Image Recognition Service (5001) ─────────────────────────────────────────
 
 class TestImageRecognition:
     def test_analyze_image_file(self):
@@ -72,7 +55,6 @@ class TestImageRecognition:
         assert r.status_code == 400
 
 
-# ── Product Search Service (5002) ─────────────────────────────────────────────
 
 class TestProductSearch:
     def test_search_returns_platforms(self):
@@ -92,7 +74,6 @@ class TestProductSearch:
         assert r.status_code == 400
 
 
-# ── Price Comparison Service (5003) ──────────────────────────────────────────
 
 _RAW = {
     "google_shopping": [
@@ -140,7 +121,6 @@ class TestPriceComparison:
         assert "min_price_sgd" in stats and "avg_price_sgd" in stats
 
 
-# ── Recommendation Service (5004) ────────────────────────────────────────────
 
 _PRODUCTS = [
     {"id": "p1", "title": "Blue Shirt Uniqlo", "price_sgd": 39.90, "store_name": "Uniqlo",
@@ -188,7 +168,6 @@ class TestRecommendation:
         assert len(r.json()["data"]) <= 1
 
 
-# ── User Preference Service (5005) ───────────────────────────────────────────
 
 class TestUserPreference:
     def test_get_prefs_new_user(self):
@@ -230,7 +209,6 @@ class TestUserPreference:
         assert "total_searches" in d
 
 
-# ── API Gateway (5000) ────────────────────────────────────────────────────────
 
 class TestAPIGateway:
     def test_services_status(self):

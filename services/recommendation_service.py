@@ -1,16 +1,3 @@
-"""
-Recommendation Service — Port 5004
-
-Ranks normalised products using a weighted score that combines item similarity,
-price fit against user budget, brand preferences, and product rating.
-Optionally applies hard filters (max price, min rating, platform whitelist).
-
-Endpoints:
-  POST /api/recommend  — rank products, return top-N with scores
-  GET  /health         — service health check
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import os
 import sys
@@ -27,8 +14,6 @@ app = Flask(__name__)
 CORS(app)
 
 
-# ── User preference fetch ─────────────────────────────────────────────────────
-
 def _fetch_preferences(user_id: str) -> dict:
     """Call the User Preference Service via REST to get stored preferences."""
     try:
@@ -43,8 +28,6 @@ def _fetch_preferences(user_id: str) -> dict:
     return {}
 
 
-# ── Scoring ───────────────────────────────────────────────────────────────────
-
 def _score(product: dict, prefs: dict) -> float:
     """
     Weighted recommendation score (0–1):
@@ -53,10 +36,7 @@ def _score(product: dict, prefs: dict) -> float:
       20% — brand preference match
       10% — product rating
     """
-    # Similarity
     sim_score = product.get("similarity", 0.5)
-
-    # Price fit
     price = product.get("price_sgd", 0)
     avg_budget = prefs.get("avg_budget_sgd") or 0
     max_budget = prefs.get("max_budget_sgd") or 0
@@ -72,7 +52,6 @@ def _score(product: dict, prefs: dict) -> float:
     else:
         price_score = 0.7  # no preference set
 
-    # Brand match
     preferred_brands = [b.lower() for b in prefs.get("preferred_brands", [])]
     title_lower = (product.get("title") or "").lower()
     store_lower = (product.get("store_name") or "").lower()
@@ -83,7 +62,6 @@ def _score(product: dict, prefs: dict) -> float:
     else:
         brand_score = 0.7
 
-    # Rating
     rating = product.get("rating")
     rating_score = min(1.0, rating / 5.0) if rating and rating > 0 else 0.6
 
@@ -105,8 +83,6 @@ def _label(score: float) -> str:
         return "Similar Style"
     return "Alternative"
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -144,10 +120,7 @@ def recommend():
     if not products:
         return jsonify({"success": True, "data": [], "count": 0})
 
-    # Fetch user preferences via REST call to preference service
     prefs = _fetch_preferences(user_id)
-
-    # Hard filters
     max_price = filters.get("max_price_sgd") or prefs.get("max_budget_sgd")
     min_rating = filters.get("min_rating")
     platform_whitelist = filters.get("platforms", [])
@@ -159,11 +132,9 @@ def recommend():
         and (not platform_whitelist or p.get("platform") in platform_whitelist)
     ]
 
-    # Fall back to unfiltered list if all products were removed
-    if not filtered:
+    if not filtered:  # fall back to unfiltered if all products were removed
         filtered = products
 
-    # Score and rank
     scored = sorted(
         [{**p, "recommendation_score": _score(p, prefs)} for p in filtered],
         key=lambda x: x["recommendation_score"],
@@ -182,8 +153,6 @@ def recommend():
         "preferences_applied": bool(prefs),
     })
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("RECOMMENDATION_SERVICE_PORT", RECOMMENDATION_SERVICE_PORT))

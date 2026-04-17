@@ -1,16 +1,3 @@
-"""
-Price Comparison Service — Port 5003
-
-Accepts raw search results from multiple platforms, normalises them into a
-common schema, converts all prices to SGD, calculates per-product similarity
-scores, and returns a deduplicated, sorted product list.
-
-Endpoints:
-  POST /api/compare  — normalise & compare, return sorted SGD products
-  GET  /health       — service health check
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import os
 import re
@@ -30,11 +17,8 @@ CORS(app)
 
 _fx = ExchangeRateClient()
 
-# Platforms with a Singapore presence get a small relevance boost
-_SG_PLATFORMS = {"shopee", "lazada", "qoo10", "courts", "harvey norman", "challenger", "zalora", "uniqlo sg"}
+_SG_PLATFORMS ={"shopee", "lazada", "qoo10", "courts", "harvey norman", "challenger", "zalora", "uniqlo sg"}
 
-
-# ── Price extraction ──────────────────────────────────────────────────────────
 
 def _extract_price(value) -> tuple[float, str]:
     """
@@ -48,7 +32,6 @@ def _extract_price(value) -> tuple[float, str]:
     if not s:
         return 0.0, "USD"
 
-    # Detect currency from symbol / code
     currency = "USD"
     if "S$" in s or "SGD" in s:
         currency = "SGD"
@@ -71,8 +54,6 @@ def _extract_price(value) -> tuple[float, str]:
     return 0.0, "USD"
 
 
-# ── Similarity scoring ────────────────────────────────────────────────────────
-
 def _similarity(product: dict, query_terms: list, position: int) -> float:
     """
     Score 0-1 based on query-term matches in title + position in result list.
@@ -84,23 +65,16 @@ def _similarity(product: dict, query_terms: list, position: int) -> float:
     if not title:
         return 0.5
 
-    # Term overlap
     hit_count = sum(1 for t in query_terms if t.lower() in title)
     term_score = min(0.9, 0.5 + (hit_count / max(len(query_terms), 1)) * 0.4)
-
-    # Position discount (first results are most relevant per platform)
     position_score = max(0.5, 1.0 - position * 0.02)
-
     score = (term_score + position_score) / 2.0
 
-    # Singapore retailer boost
     if any(sg in source for sg in _SG_PLATFORMS):
         score = min(1.0, score + 0.05)
 
     return round(score, 3)
 
-
-# ── Normalisation ─────────────────────────────────────────────────────────────
 
 _PLATFORM_LABELS = {
     "google_shopping":           "Google Shopping",
@@ -112,7 +86,6 @@ _PLATFORM_LABELS = {
 
 def _normalise(raw: dict, query_terms: list, index: int) -> Optional[dict]:
     """Map a raw platform result to the canonical product schema."""
-    # Price
     price_raw = raw.get("extracted_price") or raw.get("price", 0)
     amount, currency = _extract_price(price_raw)
     if amount <= 0:
@@ -120,12 +93,11 @@ def _normalise(raw: dict, query_terms: list, index: int) -> Optional[dict]:
 
     price_sgd = _fx.convert_to_sgd(amount, currency)
 
-    # Platform label
     platform_key = raw.get("platform", "unknown")
     platform_label = _PLATFORM_LABELS.get(platform_key, platform_key.replace("_", " ").title())
 
-    # Rating — sometimes arrives as "4.5/5" string
     rating = raw.get("rating")
+    # rating sometimes arrives as "4.5/5" string
     if isinstance(rating, str):
         try:
             rating = float(rating.replace("/5", "").strip())
@@ -153,8 +125,6 @@ def _normalise(raw: dict, query_terms: list, index: int) -> Optional[dict]:
         "is_singapore": any(sg in source.lower() for sg in _SG_PLATFORMS),
     }
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -198,7 +168,6 @@ def compare_prices():
                 normalised.append(product)
             global_idx += 1
 
-    # Deduplicate: keep the first occurrence of each title prefix
     seen: set = set()
     unique: list = []
     for p in normalised:
@@ -226,8 +195,6 @@ def compare_prices():
 
     return jsonify({"success": True, "data": unique, "stats": stats})
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("COMPARISON_SERVICE_PORT", COMPARISON_SERVICE_PORT))

@@ -1,12 +1,3 @@
-"""
-FitFinder AI — Streamlit Frontend
-
-Communicates exclusively with the API Gateway (port 5000) via REST calls.
-All product data, search history, and preference management go through
-http://localhost:5000.
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import io
 import os
@@ -17,7 +8,6 @@ from PIL import Image
 
 API_GATEWAY = os.getenv("API_GATEWAY_URL", "http://localhost:5000")
 
-# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="FitFinder AI — Smart Shopping PA",
     page_icon="🛍️",
@@ -44,8 +34,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-
-# ── API helpers ───────────────────────────────────────────────────────────────
 
 def _get(path: str, **kw):
     try:
@@ -103,8 +91,6 @@ def _post_search(image_bytes: bytes, user_id: str, keywords: str,
         r.raise_for_status()
         raise
 
-
-# ── Component helpers ─────────────────────────────────────────────────────────
 
 _BADGE_CLASS = {
     "Best Match":   "b-best",
@@ -172,8 +158,6 @@ def _render_product(p: dict, user_id: str = "default"):
         st.divider()
 
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-
 with st.sidebar:
     st.markdown("### 👤 User")
     user_id = st.text_input("User ID", value="shopper_01",
@@ -192,7 +176,6 @@ with st.sidebar:
                                 help="0 = no limit")
     st.divider()
 
-    # Live user stats
     st.markdown("### 📊 Your Stats")
     stats_data = _get(f"/api/stats/{user_id}").get("data", {})
     if stats_data.get("total_searches", 0):
@@ -205,7 +188,6 @@ with st.sidebar:
         st.info("Upload an image to get started!")
     st.divider()
 
-    # Shopping cart
     st.markdown("### 🛒 Cart")
     cart_data = _cart_get(user_id)
     cart_count = cart_data.get("count", 0)
@@ -232,7 +214,6 @@ with st.sidebar:
         st.caption("Cart is empty")
     st.divider()
 
-    # Service health
     st.markdown("### ⚙️ Service Health")
     if st.button("Check services"):
         status = _get("/api/services/status")
@@ -245,8 +226,6 @@ with st.sidebar:
     st.caption("CE/CZ4052 Cloud Computing  |  PA-as-a-Service Demo")
 
 
-# ── Main area ─────────────────────────────────────────────────────────────────
-
 st.markdown('<div class="main-title">🛍️ FitFinder AI</div>', unsafe_allow_html=True)
 st.markdown(
     '<div class="sub-title">Personal Shopping Assistant · Find the best deals in Singapore</div>',
@@ -256,7 +235,6 @@ st.markdown(
 tab_search, tab_history, tab_prefs = st.tabs(["🔍 Find Items", "📜 History", "⚙️ Preferences"])
 
 
-# ── Tab: Search ───────────────────────────────────────────────────────────────
 with tab_search:
     left, right = st.columns(2, gap="large")
 
@@ -318,8 +296,7 @@ with tab_search:
         if result.get("success"):
             analysis = result.get("analysis", {})
 
-            # AI analysis summary
-            brand_str = f"Brand: **{analysis['brand']}**" if analysis.get("brand") else "No brand detected"
+            brand_str =f"Brand: **{analysis['brand']}**" if analysis.get("brand") else "No brand detected"
             st.markdown(
                 f'<div class="analysis-box">'
                 f'<strong>🤖 AI identified:</strong> '
@@ -332,7 +309,6 @@ with tab_search:
                 unsafe_allow_html=True,
             )
 
-            # Price stats
             s = result.get("stats", {})
             if s:
                 c1, c2, c3, c4 = st.columns(4)
@@ -354,7 +330,6 @@ with tab_search:
             st.error(f"Search error: {result['error']}")
 
 
-# ── Tab: History ──────────────────────────────────────────────────────────────
 with tab_history:
     st.subheader("📜 Recent Searches")
     history = _get(f"/api/history/{user_id}?limit=15").get("data", [])
@@ -378,7 +353,6 @@ with tab_history:
         st.info("No history yet — upload an image to start searching!")
 
 
-# ── Tab: Preferences ──────────────────────────────────────────────────────────
 with tab_prefs:
     st.subheader("⚙️ Shopping Preferences")
     st.info(
@@ -437,7 +411,6 @@ with tab_prefs:
             except Exception as exc:
                 st.error(f"Error: {exc}")
 
-    # Show auto-learned profile
     if prefs.get("avg_budget_sgd"):
         st.divider()
         st.markdown("**📈 Learned from your search history:**")

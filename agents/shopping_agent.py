@@ -1,19 +1,3 @@
-"""
-Shopping Agent — Main AI orchestrator for FitFinder PA-as-a-Service.
-
-Implements the full shopping workflow by making sequential REST API calls
-to each independent microservice.  No direct Python imports of service code —
-every step communicates via HTTP, demonstrating true microservices architecture.
-
-Workflow:
-  1. POST http://localhost:5001/api/analyze       — Image Recognition Service
-  2. POST http://localhost:5002/api/search        — Product Search Service
-  3. POST http://localhost:5003/api/compare       — Price Comparison Service
-  4. POST http://localhost:5004/api/recommend     — Recommendation Service
-  5. POST http://localhost:5005/api/history       — User Preference Service
-
-CE/CZ4052 Cloud Computing — Topic 2: Personal Assistant-as-a-Service
-"""
 
 import base64
 import os
@@ -47,8 +31,6 @@ class ShoppingAgent:
             "recommend":  RECOMMENDATION_SERVICE_URL,
             "preference": PREFERENCE_SERVICE_URL,
         }
-
-    # ── Public entry point ────────────────────────────────────────────────────
 
     def process_shopping_request(
         self,
@@ -84,7 +66,6 @@ class ShoppingAgent:
             "error": None,
         }
 
-        # ── Step 1: Image Recognition ─────────────────────────────────────────
         self._log("Step 1/5 -> Image Recognition Service (port 5001)")
         analysis, img_error = self._call_image_recognition(image_path, image_base64)
         if not analysis:
@@ -93,7 +74,6 @@ class ShoppingAgent:
         result["analysis"] = analysis
         self._log(f"  Identified: {analysis.get('type')} / {analysis.get('color')} / {analysis.get('style')}")
 
-        # ── Step 2: Product Search ────────────────────────────────────────────
         self._log("Step 2/5 -> Product Search Service (port 5002)")
         description = analysis.get("description") or (
             f"{analysis.get('color', '')} {analysis.get('type', '')}".strip()
@@ -110,7 +90,6 @@ class ShoppingAgent:
         total_raw = sum(len(v) for v in raw_results.values())
         self._log(f"  Found {total_raw} raw results across {len(raw_results)} platforms")
 
-        # ── Step 3: Price Comparison ──────────────────────────────────────────
         self._log("Step 3/5 -> Price Comparison Service (port 5003)")
         query_terms = analysis.get("search_terms", []) + [
             analysis.get("type", ""), analysis.get("color", "")
@@ -122,7 +101,6 @@ class ShoppingAgent:
         result["stats"] = compared.get("stats", {})
         self._log(f"  Normalised {len(compared.get('data', []))} products -> SGD")
 
-        # ── Step 4: Recommendation ────────────────────────────────────────────
         self._log("Step 4/5 -> Recommendation Service (port 5004)")
         recommendations = self._call_recommendation(
             products=compared.get("data", []),
@@ -133,7 +111,6 @@ class ShoppingAgent:
         result["products"] = recommendations
         self._log(f"  Selected top {len(recommendations)} recommendations")
 
-        # ── Step 5: Save to history ───────────────────────────────────────────
         self._log("Step 5/5 -> User Preference Service (port 5005)")
         top = recommendations[0] if recommendations else {}
         self._save_history(
@@ -146,8 +123,6 @@ class ShoppingAgent:
 
         result["success"] = True
         return result
-
-    # ── Private: REST API calls ───────────────────────────────────────────────
 
     def _call_image_recognition(
         self, image_path: Optional[str], image_base64: Optional[str]
@@ -287,8 +262,6 @@ class ShoppingAgent:
     def _log(msg: str):
         print(f"[ShoppingAgent] {msg}")
 
-
-# ── Standalone CLI usage ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import sys as _sys

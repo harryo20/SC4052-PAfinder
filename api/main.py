@@ -1,22 +1,3 @@
-"""
-API Gateway — Port 5000
-
-Unified REST interface consumed by the Streamlit frontend and any external client.
-Proxies preference/history calls to the User Preference Service and delegates
-full searches to the ShoppingAgent orchestrator.
-
-Endpoints:
-  POST /api/search                — full PA workflow (image upload)
-  GET  /api/history/<user_id>     — search history
-  GET  /api/preferences/<user_id> — user preferences
-  PUT  /api/preferences/<user_id> — update preferences
-  POST /api/save-item             — save product to wishlist
-  GET  /api/stats/<user_id>       — shopping analytics
-  GET  /api/services/status       — microservice health dashboard
-  GET  /health                    — gateway health check
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import base64
 import os
@@ -54,8 +35,6 @@ _SERVICE_HEALTH_URLS = {
 }
 
 
-# ── Gateway health ────────────────────────────────────────────────────────────
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "api-gateway", "port": API_GATEWAY_PORT})
@@ -75,8 +54,6 @@ def services_status():
     all_ok = all(s["status"] == "ok" for s in statuses.values())
     return jsonify({"all_healthy": all_ok, "services": statuses})
 
-
-# ── Main search ───────────────────────────────────────────────────────────────
 
 @app.route("/api/search", methods=["POST"])
 def search():
@@ -142,8 +119,6 @@ def search():
     return jsonify(result), (200 if result["success"] else 500)
 
 
-# ── Preference & history proxies ──────────────────────────────────────────────
-
 @app.route("/api/history/<user_id>", methods=["GET"])
 def get_history(user_id: str):
     limit = request.args.get("limit", 20)
@@ -198,8 +173,6 @@ def get_stats(user_id: str):
         return jsonify({"success": False, "error": str(exc)}), 500
 
 
-# ── Cart proxies ──────────────────────────────────────────────────────────────
-
 @app.route("/api/cart/add", methods=["POST"])
 def cart_add():
     try:
@@ -235,8 +208,6 @@ def cart_clear(user_id: str):
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("API_GATEWAY_PORT", API_GATEWAY_PORT))

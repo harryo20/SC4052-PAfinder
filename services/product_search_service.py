@@ -1,15 +1,3 @@
-"""
-Product Search Service — Port 5002
-
-Queries multiple e-commerce platforms in parallel and returns raw results.
-Uses SerpAPI (Google Shopping) as the primary source and RapidAPI as secondary.
-
-Endpoints:
-  POST /api/search  — search across platforms, return aggregated raw results
-  GET  /health      — service health check
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import concurrent.futures
 import os
@@ -29,7 +17,6 @@ CORS(app)
 _serp = SerpAPIClient()
 _rapid = RapidAPIShoppingClient()
 
-# ── Mock data ─────────────────────────────────────────────────────────────────
 MOCK_RESULTS = {
     "google_shopping": [
         {
@@ -104,8 +91,6 @@ MOCK_RESULTS = {
 }
 
 
-# ── Per-platform search helpers ───────────────────────────────────────────────
-
 def _search_google_shopping(query: str, num: int) -> list:
     """Google Shopping via SerpAPI, localised for Singapore."""
     try:
@@ -157,8 +142,6 @@ def _safe_float(value) -> float:
         return 0.0
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "product-search", "port": SEARCH_SERVICE_PORT})
@@ -197,7 +180,6 @@ def search_products():
 
     half = max(5, max_results // 2)
 
-    # Search all platforms in parallel — true concurrent HTTP calls
     all_results: dict = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         futures = {
@@ -215,8 +197,6 @@ def search_products():
     total = sum(len(v) for v in all_results.values())
     return jsonify({"success": True, "data": all_results, "total": total, "query": query})
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("SEARCH_SERVICE_PORT", SEARCH_SERVICE_PORT))

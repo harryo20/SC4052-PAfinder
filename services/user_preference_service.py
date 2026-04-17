@@ -1,23 +1,3 @@
-"""
-User Preference Service — Port 5005
-
-Stores and evolves a user's shopping habits in SQLite.
-Automatically learns brand/style/budget patterns from search history
-and surfaces them as personalised filters for the Recommendation Service.
-
-Endpoints:
-  GET    /api/preferences/<user_id>   — fetch preferences (+ computed avg_budget)
-  PUT    /api/preferences/<user_id>   — create / update preferences
-  POST   /api/history                 — save a completed search
-  GET    /api/history/<user_id>       — retrieve recent searches
-  DELETE /api/history/<user_id>       — clear all history
-  GET    /api/stats/<user_id>         — shopping analytics
-  POST   /api/saved-items             — save a product for later
-  GET    /api/saved-items/<user_id>   — list saved products
-  GET    /health                      — health check
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import json
 import os
@@ -35,8 +15,6 @@ from utils.config import PREFERENCE_SERVICE_PORT, DATABASE_PATH
 app = Flask(__name__)
 CORS(app)
 
-
-# ── Database helpers ──────────────────────────────────────────────────────────
 
 def _get_db() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(DATABASE_PATH), exist_ok=True)
@@ -94,8 +72,6 @@ def _init_db():
 
 _init_db()
 
-
-# ── Preference auto-learning ──────────────────────────────────────────────────
 
 def _auto_learn(conn: sqlite3.Connection, user_id: str):
     """
@@ -165,14 +141,10 @@ def _auto_learn(conn: sqlite3.Connection, user_id: str):
     conn.commit()
 
 
-# ── Routes ────────────────────────────────────────────────────────────────────
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok", "service": "user-preference", "port": PREFERENCE_SERVICE_PORT})
 
-
-# ── Preferences ───────────────────────────────────────────────────────────────
 
 @app.route("/api/preferences/<user_id>", methods=["GET"])
 def get_preferences(user_id: str):
@@ -198,7 +170,6 @@ def get_preferences(user_id: str):
                 "size_info": {},
             }
 
-        # Compute avg_budget_sgd from history for the recommender
         avg_row = conn.execute(
             """SELECT AVG(top_result_price_sgd) avg FROM search_history
                WHERE user_id=? AND top_result_price_sgd IS NOT NULL""",
@@ -268,8 +239,6 @@ def update_preferences(user_id: str):
         conn.close()
 
 
-# ── Search history ────────────────────────────────────────────────────────────
-
 @app.route("/api/history", methods=["POST"])
 def save_search():
     body = request.get_json()
@@ -332,8 +301,6 @@ def clear_history(user_id: str):
         conn.close()
 
 
-# ── Stats / analytics ─────────────────────────────────────────────────────────
-
 @app.route("/api/stats/<user_id>", methods=["GET"])
 def get_stats(user_id: str):
     conn = _get_db()
@@ -381,8 +348,6 @@ def get_stats(user_id: str):
         conn.close()
 
 
-# ── Saved items ───────────────────────────────────────────────────────────────
-
 @app.route("/api/saved-items", methods=["POST"])
 def save_item():
     body = request.get_json()
@@ -424,8 +389,6 @@ def get_saved_items(user_id: str):
     finally:
         conn.close()
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("PREFERENCE_SERVICE_PORT", PREFERENCE_SERVICE_PORT))

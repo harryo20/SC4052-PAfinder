@@ -1,7 +1,3 @@
-"""
-api_clients.py — Thin wrappers around each third-party API.
-All network I/O lives here; services import these helpers.
-"""
 
 import json
 import time
@@ -15,8 +11,6 @@ from utils.config import (
     RAPIDAPI_HOST, RAPIDAPI_BASE_URL,
 )
 
-
-# ── Claude Vision ─────────────────────────────────────────────────────────────
 
 class ClaudeClient:
     """Anthropic Claude Vision API — identifies products from images."""
@@ -79,8 +73,6 @@ class ClaudeClient:
         return json.loads(text)
 
 
-# ── SerpAPI ───────────────────────────────────────────────────────────────────
-
 class SerpAPIClient:
     """SerpAPI — Google Shopping and eBay search."""
 
@@ -113,8 +105,6 @@ class SerpAPIClient:
             return []
 
 
-# ── RapidAPI Product Search ───────────────────────────────────────────────────
-
 class RapidAPIShoppingClient:
     """RapidAPI Real-Time Product Search — extra platform coverage."""
 
@@ -135,8 +125,6 @@ class RapidAPIShoppingClient:
         except Exception:
             return []
 
-
-# ── Exchange Rate ─────────────────────────────────────────────────────────────
 
 class ExchangeRateClient:
     """

@@ -75,7 +75,6 @@ def main():
     print("=" * 62)
     print()
 
-    # Start all back-end microservices
     for name, script, port in SERVICES:
         if not os.path.exists(script):
             print(f"  [SKIP] {script} not found")
@@ -94,7 +93,6 @@ def main():
     print("  Waiting for services to initialise …")
     time.sleep(3)
 
-    # Start Streamlit
     frontend = subprocess.Popen(
         [
             sys.executable, "-m", "streamlit", "run", "frontend/app.py",
@@ -107,7 +105,6 @@ def main():
     _procs.append(frontend)
     print(f"  ✓  {'Streamlit Frontend':<30}  http://localhost:8501")
 
-    # Start Telegram bot only if token is configured
     tg_token = env.get("TELEGRAM_BOT_TOKEN", "")
     if tg_token and tg_token != "your_telegram_bot_token_here":
         tg_proc = subprocess.Popen(

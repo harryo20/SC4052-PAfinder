@@ -1,18 +1,3 @@
-"""
-Cart Service — Port 5006
-
-Persists user shopping carts in SQLite.
-Each item stores the full product snapshot so cart contents survive service restarts.
-
-Endpoints:
-  POST   /api/cart/add              — add a product to a user's cart
-  GET    /api/cart/<user_id>        — fetch cart with total
-  DELETE /api/cart/item/<item_id>   — remove one item
-  DELETE /api/cart/<user_id>        — clear entire cart
-  GET    /health
-
-CE/CZ4052 Cloud Computing — PA-as-a-Service
-"""
 
 import os
 import sqlite3
@@ -29,8 +14,6 @@ from utils.config import CART_SERVICE_PORT, CART_DB_PATH
 app = Flask(__name__)
 CORS(app)
 
-
-# ── Database ──────────────────────────────────────────────────────────────────
 
 def _get_db() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(os.path.abspath(CART_DB_PATH)), exist_ok=True)
@@ -61,8 +44,6 @@ def _init_db():
 
 _init_db()
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -144,8 +125,6 @@ def clear_cart(user_id: str):
     finally:
         conn.close()
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("CART_SERVICE_PORT", CART_SERVICE_PORT))

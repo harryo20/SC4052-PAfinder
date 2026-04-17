@@ -1,17 +1,3 @@
-"""
-FitFinder AI — Background Price Drop Monitor
-
-Runs via APScheduler every 4 hours. Re-fetches prices for all watched items
-and proactively messages users when a price drops by the alert threshold.
-
-Public API (used by bot.py):
-  init_db()                          — create watched_items table
-  save_watched_item(user_id, item, search_query)
-  get_watched_items(user_id) -> list
-  deactivate_watched_item(item_id)
-  get_item_by_id(item_id) -> dict | None
-  get_scheduler(bot) -> AsyncIOScheduler
-"""
 
 import asyncio
 import logging
@@ -28,8 +14,6 @@ logger = logging.getLogger(__name__)
 _DB_PATH = os.getenv("WATCHED_DB_PATH", os.path.join("database", "watched_items.db"))
 _API_BASE = os.getenv("API_GATEWAY_URL", "http://localhost:5000")
 
-
-# ── Database ──────────────────────────────────────────────────────────────────
 
 def init_db():
     os.makedirs(os.path.dirname(_DB_PATH) or ".", exist_ok=True)
@@ -103,8 +87,6 @@ def get_item_by_id(item_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-# ── Price fetching ────────────────────────────────────────────────────────────
-
 def _fetch_current_price(product_name: str, platform: str, search_query: str) -> float | None:
     """
     Re-search the product by text via /api/search-text and return the current
@@ -133,8 +115,6 @@ def _fetch_current_price(product_name: str, platform: str, search_query: str) ->
         logger.debug(f"Price fetch skipped for '{product_name}': {exc}")
         return None
 
-
-# ── Scheduler jobs ────────────────────────────────────────────────────────────
 
 async def check_price_drops(bot: Bot):
     """Fetch current prices for all active watched items and alert on drops."""

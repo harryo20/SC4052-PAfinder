@@ -1,16 +1,3 @@
-"""
-Image Recognition Service — Port 5001
-
-Analyzes uploaded product images using Claude claude-sonnet-4-6 Vision API
-and returns structured clothing/product features.
-
-Endpoints:
-  POST /api/analyze  — accept image file or base64, return product description
-  GET  /health       — service health check
-
-Part of the FitFinder AI PA-as-a-Service microservices architecture.
-CE/CZ4052 Cloud Computing — Topic 2: Personal Assistant-as-a-Service
-"""
 
 import base64
 import io
@@ -22,7 +9,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
 
-# Ensure project root is on the path so sibling packages resolve
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import IMAGE_SERVICE_PORT, USE_MOCK_DATA
@@ -33,7 +19,6 @@ CORS(app)
 
 _claude = ClaudeClient()
 
-# ── Mock data for development / demo without API keys ─────────────────────────
 MOCK_ANALYSIS = {
     "type": "shirt",
     "color": "Blue",
@@ -47,8 +32,6 @@ MOCK_ANALYSIS = {
     "confidence": 0.92,
 }
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _resize_image(image_bytes: bytes, max_dimension: int = 1024) -> bytes:
     """Downscale image so the longest side ≤ max_dimension, keep aspect ratio."""
@@ -73,8 +56,6 @@ def _detect_media_type(filename: str) -> str:
         "png": "image/png", "gif": "image/gif", "webp": "image/webp",
     }.get(ext, "image/jpeg")
 
-
-# ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -141,8 +122,6 @@ def analyze_image():
     except Exception as exc:
         return jsonify({"success": False, "error": str(exc)}), 500
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.getenv("IMAGE_SERVICE_PORT", IMAGE_SERVICE_PORT))
