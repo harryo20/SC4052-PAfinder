@@ -1,0 +1,27 @@
+# FitFinder AI — PA-as-a-Service
+# Install: pip install -r requirements.txt
+
+# ── Web framework & CORS ───────────────────────────────────────────────
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# ── HTTP client (inter-service REST calls + external APIs) ─────────────
+requests>=2.31.0
+
+# ── Environment variable management ───────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Image handling ─────────────────────────────────────────────────────
+Pillow>=10.0.0
+
+# ── Streamlit frontend ─────────────────────────────────────────────────
+streamlit>=1.32.0
+
+# ── Anthropic Claude SDK (optional — direct SDK alternative to raw HTTP)
+anthropic>=0.25.0
+
+# ── Telegram bot ───────────────────────────────────────────────────────
+python-telegram-bot>=20.7
+
+# ── Testing ────────────────────────────────────────────────────────────
+pytest>=8.0.0

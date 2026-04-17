@@ -1,0 +1,43 @@
+name: FitFinderAI
+options:
+  bundleIdPrefix: com.fitfinderai
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: true
+  indentWidth: 4
+  tabWidth: 4
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    ENABLE_PREVIEWS: YES
+    DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+
+targets:
+  FitFinderAI:
+    type: application
+    platform: iOS
+    sources:
+      - path: FitFinderAI
+        excludes:
+          - "**/.DS_Store"
+    resources:
+      - path: FitFinderAI/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fitfinderai.app
+        PRODUCT_NAME: FitFinder AI
+        INFOPLIST_FILE: FitFinderAI/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        TARGETED_DEVICE_FAMILY: "1"
+      configs:
+        Debug:
+          DEBUG_INFORMATION_FORMAT: dwarf
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          VALIDATE_PRODUCT: YES
