@@ -24,12 +24,15 @@ CART_SERVICE_PORT = int(os.getenv("CART_SERVICE_PORT", "5006"))
 API_GATEWAY_PORT = int(os.getenv("API_GATEWAY_PORT", "5000"))
 
 # ── Service Base URLs ─────────────────────────────────────────────────────────
-IMAGE_SERVICE_URL = f"http://localhost:{IMAGE_SERVICE_PORT}"
-SEARCH_SERVICE_URL = f"http://localhost:{SEARCH_SERVICE_PORT}"
-COMPARISON_SERVICE_URL = f"http://localhost:{COMPARISON_SERVICE_PORT}"
-RECOMMENDATION_SERVICE_URL = f"http://localhost:{RECOMMENDATION_SERVICE_PORT}"
-PREFERENCE_SERVICE_URL = f"http://localhost:{PREFERENCE_SERVICE_PORT}"
-CART_SERVICE_URL = f"http://localhost:{CART_SERVICE_PORT}"
+# These can be overridden via environment variables for Docker deployments
+# (e.g. IMAGE_SERVICE_URL=http://image-service:5001).
+# In local development the localhost defaults are used automatically.
+IMAGE_SERVICE_URL        = os.getenv("IMAGE_SERVICE_URL",        f"http://localhost:{IMAGE_SERVICE_PORT}")
+SEARCH_SERVICE_URL       = os.getenv("SEARCH_SERVICE_URL",       f"http://localhost:{SEARCH_SERVICE_PORT}")
+COMPARISON_SERVICE_URL   = os.getenv("COMPARISON_SERVICE_URL",   f"http://localhost:{COMPARISON_SERVICE_PORT}")
+RECOMMENDATION_SERVICE_URL = os.getenv("RECOMMENDATION_SERVICE_URL", f"http://localhost:{RECOMMENDATION_SERVICE_PORT}")
+PREFERENCE_SERVICE_URL   = os.getenv("PREFERENCE_SERVICE_URL",   f"http://localhost:{PREFERENCE_SERVICE_PORT}")
+CART_SERVICE_URL         = os.getenv("CART_SERVICE_URL",         f"http://localhost:{CART_SERVICE_PORT}")
 
 # ── Claude API ────────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-6"

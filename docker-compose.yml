@@ -1,0 +1,216 @@
+# ── FitFinder AI — Docker Compose ─────────────────────────────────────────────
+# Start everything:      docker-compose up --build
+# Run in background:     docker-compose up -d --build
+# Scale API gateway:     docker-compose up -d --scale api-gateway=3
+#   then reload nginx:   docker-compose exec nginx nginx -s reload
+# View logs:             docker-compose logs -f
+# Stop + remove:         docker-compose down
+# Stop + remove volumes: docker-compose down -v
+
+version: '3.8'
+
+# ── Extension anchors ──────────────────────────────────────────────────────────
+# Reusable service URLs (override localhost defaults for Docker networking)
+x-service-urls: &service-urls
+  IMAGE_SERVICE_URL:            http://image-service:5001
+  SEARCH_SERVICE_URL:           http://search-service:5002
+  COMPARISON_SERVICE_URL:       http://comparison-service:5003
+  RECOMMENDATION_SERVICE_URL:   http://recommendation-service:5004
+  PREFERENCE_SERVICE_URL:       http://preference-service:5005
+  CART_SERVICE_URL:             http://cart-service:5006
+  API_GATEWAY_URL:              http://api-gateway:5000
+
+# ── Services ───────────────────────────────────────────────────────────────────
+services:
+
+  # ── Image Recognition (port 5001) ─────────────────────────────────────────
+  image-service:
+    build: .
+    command: python services/image_recognition_service.py
+    ports:
+      - "5001:5001"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5001/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── Product Search (port 5002) ────────────────────────────────────────────
+  search-service:
+    build: .
+    command: python services/product_search_service.py
+    ports:
+      - "5002:5002"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5002/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── Price Comparison (port 5003) ──────────────────────────────────────────
+  comparison-service:
+    build: .
+    command: python services/price_comparison_service.py
+    ports:
+      - "5003:5003"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5003/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── Recommendation (port 5004) ────────────────────────────────────────────
+  recommendation-service:
+    build: .
+    command: python services/recommendation_service.py
+    ports:
+      - "5004:5004"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5004/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── User Preference (port 5005) ───────────────────────────────────────────
+  preference-service:
+    build: .
+    command: python services/user_preference_service.py
+    ports:
+      - "5005:5005"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_PATH: /app/database/preferences.db
+    volumes:
+      - db_data:/app/database
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5005/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── Cart (port 5006) ──────────────────────────────────────────────────────
+  cart-service:
+    build: .
+    command: python services/cart_service.py
+    ports:
+      - "5006:5006"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      CART_DB_PATH: /app/database/carts.db
+    volumes:
+      - db_data:/app/database
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5006/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # ── API Gateway (port 5000 — internal only; nginx exposes port 80) ─────────
+  # To scale:  docker-compose up -d --scale api-gateway=3
+  # NOTE: no host-port mapping here so multiple instances don't conflict.
+  #       For temporary direct access during dev add:  ports: ["5000:5000"]
+  api-gateway:
+    build: .
+    command: python api/main.py
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      <<: *service-urls
+    depends_on:
+      image-service:
+        condition: service_healthy
+      search-service:
+        condition: service_healthy
+      comparison-service:
+        condition: service_healthy
+      recommendation-service:
+        condition: service_healthy
+      preference-service:
+        condition: service_healthy
+      cart-service:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Nginx Load Balancer (port 80) ─────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+  # ── Streamlit Frontend (port 8501) ────────────────────────────────────────
+  frontend:
+    build: .
+    command: >
+      python -m streamlit run frontend/app.py
+      --server.port 8501
+      --server.headless true
+      --browser.gatherUsageStats false
+    ports:
+      - "8501:8501"
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      API_GATEWAY_URL: http://api-gateway:5000
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+  # ── Telegram Bot (no open port — polling) ─────────────────────────────────
+  telegram-bot:
+    build: .
+    command: python telegram_bot/bot.py
+    env_file: .env
+    environment:
+      PYTHONUNBUFFERED: "1"
+      API_GATEWAY_URL: http://api-gateway:5000
+    depends_on:
+      - api-gateway
+    restart: unless-stopped
+
+# ── Volumes ────────────────────────────────────────────────────────────────────
+volumes:
+  db_data:
+    driver: local   # persists SQLite databases across container restarts
+
+# ── Network ────────────────────────────────────────────────────────────────────
+networks:
+  default:
+    name: fitfinder-network
+    driver: bridge

@@ -48,7 +48,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-API_BASE = f"http://localhost:{API_GATEWAY_PORT}"
+# In Docker the gateway is reachable via its service name.
+# Set API_GATEWAY_URL=http://api-gateway:5000 in the container environment.
+API_BASE = os.getenv("API_GATEWAY_URL", f"http://localhost:{API_GATEWAY_PORT}")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
