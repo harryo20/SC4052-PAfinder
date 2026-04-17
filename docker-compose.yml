@@ -200,6 +200,9 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       API_GATEWAY_URL: http://api-gateway:5000
+      WATCHED_DB_PATH: /app/database/watched_items.db
+    volumes:
+      - db_data:/app/database
     depends_on:
       - api-gateway
     restart: unless-stopped

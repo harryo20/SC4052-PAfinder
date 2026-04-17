@@ -34,6 +34,14 @@ from telegram.ext import (
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.config import TELEGRAM_BOT_TOKEN, API_GATEWAY_PORT, CLAUDE_API_KEY, CLAUDE_MODEL
+from telegram_bot.price_monitor import (
+    init_db,
+    save_watched_item,
+    get_watched_items,
+    deactivate_watched_item,
+    get_item_by_id,
+    get_scheduler,
+)
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -90,6 +98,8 @@ Based on the user's message, return a JSON object with this exact structure:
     "view_cart",         // user wants to see their cart
     "remove_from_cart",  // user wants to remove an item from cart
     "clear_cart",        // user wants to empty the cart
+    "watch_price",       // user wants to track price drops on an item
+    "list_watched",      // user wants to see what items they're tracking
     "search_cheaper",    // find cheaper alternatives to last results
     "search_specific",   // search with new / different keywords
     "filter_results",    // filter last results by budget / platform / brand
@@ -100,6 +110,7 @@ Based on the user's message, return a JSON object with this exact structure:
   "parameters": {{
     // add_to_cart:       {{"item_number": 1–5 or null (default first)}}
     // remove_from_cart:  {{"item_number": 1–5}}
+    // watch_price:       {{"item_number": 1–5 or null (default first)}}
     // search_cheaper:    {{"max_price": number or null}}
     // search_specific:   {{"keywords": "string"}}
     // filter_results:    {{"budget_max": number or null, "platform": "string or null", "brand": "string or null"}}
@@ -122,6 +133,9 @@ Examples:
 "what's in my cart?"        → {{"action":"view_cart","parameters":{{}}}}
 "clear my cart"             → {{"action":"clear_cart","parameters":{{}}}}
 "remove item 2"             → {{"action":"remove_from_cart","parameters":{{"item_number":2}}}}
+"watch this / alert me if price drops" → {{"action":"watch_price","parameters":{{"item_number":1}}}}
+"track item 3"              → {{"action":"watch_price","parameters":{{"item_number":3}}}}
+"what are you watching?"    → {{"action":"list_watched","parameters":{{}}}}
 "hi!"                       → {{"action":"chitchat","parameters":{{"reply":"Hey! Send me a photo of any clothing item and I'll hunt down the best prices 👀"}}}}
 """
 
@@ -244,6 +258,39 @@ async def _execute_action(action: dict, session: dict, user_id: str) -> str:
     if act == "clear_cart":
         _cart_clear(user_id)
         return "Cart cleared! 🗑️"
+
+    if act == "watch_price":
+        results = session.get("last_search_results", [])
+        if not results:
+            return "Send me a photo first so I know what to watch! 📸"
+        idx = max(0, (params.get("item_number") or 1) - 1)
+        idx = min(idx, len(results) - 1)
+        item = results[idx]
+        search_query = session.get("last_image_analysis", "")
+        await asyncio.to_thread(save_watched_item, user_id, item, search_query)
+        title = (item.get("title") or "Item")[:50]
+        price = item.get("price_sgd", 0)
+        platform = item.get("platform", "")
+        return (
+            f"👀 Watching *{title}*\n"
+            f"📍 {platform} · Current price: S${price:.2f}\n\n"
+            "I'll message you the moment the price drops! 🔔"
+        )
+
+    if act == "list_watched":
+        items = await asyncio.to_thread(get_watched_items, user_id)
+        if not items:
+            return "You're not watching any items yet! Say _'watch this'_ after a search to track price drops 👀"
+        lines = ["👀 *Items I'm watching for you:*\n"]
+        for it in items:
+            change = it["original_price"] - it["last_seen_price"]
+            indicator = f"📉 S${change:.2f} cheaper!" if change > 0 else "→ No change yet"
+            lines.append(
+                f"• *{it['product_name'][:40]}*\n"
+                f"  {it['platform']} | S${it['last_seen_price']:.2f} {indicator}"
+            )
+        lines.append("\n_I check prices every 4 hours and message you when they drop!_")
+        return "\n".join(lines)
 
     if act == "remove_from_cart":
         data = _cart_get(user_id)
@@ -517,19 +564,76 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer("Failed to add to cart.", show_alert=True)
 
 
+async def handle_alert_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle button presses from proactive price-drop alert messages."""
+    query = update.callback_query
+    await query.answer()
+
+    parts = query.data.split("|", 1)
+    if len(parts) != 2:
+        return
+    action_type, raw_id = parts
+
+    try:
+        item_id = int(raw_id)
+    except ValueError:
+        return
+
+    if action_type == "alert_cart":
+        item = await asyncio.to_thread(get_item_by_id, item_id)
+        if not item:
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text("Couldn't find that item — it may have been removed.")
+            return
+        # Build a minimal product dict compatible with the cart API
+        product = {
+            "title": item["product_name"],
+            "platform": item["platform"],
+            "purchase_url": item["product_url"],
+            "price_sgd": item["last_seen_price"],
+        }
+        user_id = str(query.from_user.id)
+        if _cart_add(user_id, product):
+            await query.edit_message_reply_markup(reply_markup=None)
+            await query.message.reply_text(
+                f"Added *{item['product_name'][:50]}* to your cart at S${item['last_seen_price']:.2f} 🛒",
+                parse_mode="Markdown",
+            )
+        else:
+            await query.message.reply_text("Couldn't add to cart — try again.")
+
+    elif action_type == "alert_stop":
+        await asyncio.to_thread(deactivate_watched_item, item_id)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text("Got it, stopped watching that item 👍")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
+
+async def _post_init(application: Application) -> None:
+    init_db()
+    scheduler = get_scheduler(application.bot)
+    scheduler.start()
+    logger.info("Price monitor started — checks every 4 hours, first run in 30 s")
+
 
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("[TelegramBot] TELEGRAM_BOT_TOKEN not set — bot will not start.")
         return
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .post_init(_post_init)
+        .build()
+    )
 
     app.add_handler(CommandHandler("start", cmd_start))
-    # Single handler for all natural-language text — no per-command handlers needed
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    # alert_ pattern must be registered before the generic catch-all
+    app.add_handler(CallbackQueryHandler(handle_alert_callback, pattern="^alert_"))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
     print("[TelegramBot] Running (polling)…")
